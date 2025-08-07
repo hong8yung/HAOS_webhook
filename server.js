@@ -1,56 +1,72 @@
-const express = require('express');
-const bodyParser = require('body-parser');
-const axios = require('axios');
+const express = require("express");
+const axios = require("axios");
 const app = express();
-app.use(bodyParser.json());
 
-// 🔐 HA Webhook 주소는 환경변수에서 읽음
+require("dotenv").config();
+
+const PORT = process.env.PORT || 10000;
 const HA_WEBHOOK_URL = process.env.HA_WEBHOOK_URL;
-const { HA_WEBHOOK_URL, WEBHOOK_TOKEN } = process.env;
+const WEBHOOK_TOKEN = process.env.WEBHOOK_TOKEN;
 
-if (!HA_WEBHOOK_URL) {
-  console.error("❌ HA_WEBHOOK_URL 환경변수가 설정되어 있지 않습니다.");
-  process.exit(1); // 환경변수가 없으면 서버 중단
+if (!HA_WEBHOOK_URL || !WEBHOOK_TOKEN) {
+  console.error("환경변수 HA_WEBHOOK_URL 또는 WEBHOOK_TOKEN 누락");
+  process.exit(1);
 }
 
-app.post('/smartthings', async (req, res) => {
+app.use(express.json());
+
+app.post("/smartthings", async (req, res) => {
   const incomingToken = req.query.token;
-
-if (incomingToken !== WEBHOOK_TOKEN) {
-  console.warn("잘못된 토큰 요청 거부:", incomingToken);
-  return res.status(403).send("Forbidden");
-}
-  
   const body = req.body;
-  console.log("📥 SmartThings Event:", JSON.stringify(body, null, 2));
+  const lifecycle = body.lifecycle;
 
-  if (body.lifecycle === 'EVENT') {
-    const events = body.eventData?.events || [];
-    for (let e of events) {
-      if (
-        e.eventType === 'DEVICE_EVENT' &&
-        e.deviceEvent.capability === 'lock' &&
-        e.deviceEvent.value === 'unlocked'
-      ) {
-        try {
-          await axios.post(HA_WEBHOOK_URL, {
-            user: e.deviceEvent.data?.usedCode || 'unknown',
-            method: e.deviceEvent.data?.method || 'fingerprint',
-            timestamp: new Date().toISOString()
-          });
-          console.log("✅ Forwarded to Home Assistant webhook.");
-        } catch (error) {
-          console.error("❌ Error sending to HA:", error.message);
-        }
+  // 🔐 Token 인증
+  if (incomingToken !== WEBHOOK_TOKEN) {
+    console.warn("❌ 잘못된 토큰:", incomingToken);
+    return res.status(403).send("Forbidden");
+  }
+
+  // 📡 PING: SmartThings 검증용
+  if (lifecycle === "PING") {
+    console.log("📡 PING 수신됨");
+    return res.json({
+      statusCode: 200,
+      pingData: {
+        challenge: body.pingData.challenge
       }
+    });
+  }
+
+  // ✅ CONFIRMATION: SmartThings 앱 등록 확인용
+  if (lifecycle === "CONFIRMATION") {
+    console.log("🔗 CONFIRMATION URL 접속:", body.confirmationData.confirmationUrl);
+    return res.redirect(body.confirmationData.confirmationUrl);
+  }
+
+  // 📦 INSTALL: 앱이 설치될 때
+  if (lifecycle === "INSTALL") {
+    console.log("📦 SmartApp 설치됨");
+    return res.status(200).json({ statusCode: 200 });
+  }
+
+  // 🔔 EVENT: 도어락 이벤트 등
+  if (lifecycle === "EVENT") {
+    console.log("📨 EVENT 수신 → HA로 전달 시도");
+
+    try {
+      await axios.post(HA_WEBHOOK_URL, body); // HA로 전달
+      return res.status(200).send("OK");
+    } catch (err) {
+      console.error("🚨 HA Webhook 전송 실패:", err.message);
+      return res.status(500).send("HA 전송 실패");
     }
   }
 
-  res.status(200).send('OK');
+  // ❓ 알 수 없는 요청
+  console.warn("❓ 알 수 없는 lifecycle:", lifecycle);
+  return res.status(400).send("Unsupported lifecycle");
 });
 
-// Render 환경에서는 PORT 환경변수를 자동 지정함
-const port = process.env.PORT || 3000;
-app.listen(port, () => {
-  console.log(`✅ SmartThings Webhook listening on port ${port}`);
+app.listen(PORT, () => {
+  console.log(`✅ SmartThings Webhook listening on port ${PORT}`);
 });
