@@ -39,8 +39,16 @@ app.post("/smartthings", async (req, res) => {
 
   // ✅ CONFIRMATION: SmartThings 앱 등록 확인용
   if (lifecycle === "CONFIRMATION") {
-    console.log("🔗 CONFIRMATION URL 접속:", body.confirmationData.confirmationUrl);
-    return res.redirect(body.confirmationData.confirmationUrl);
+    const confirmUrl = body.confirmationData.confirmationUrl;
+    console.log("🔗 CONFIRMATION URL 호출 중:", confirmUrl);
+    try {
+      await axios.get(confirmUrl); // SmartThings로 직접 GET 호출
+      console.log("✅ CONFIRMATION GET 성공");
+      return res.status(200).send("CONFIRMATION DONE");
+    } catch (err) {
+      console.error("❌ CONFIRMATION 실패:", err.message);
+      return res.status(500).send("CONFIRMATION FAILED");
+    }
   }
 
   // 📦 INSTALL: 앱이 설치될 때
