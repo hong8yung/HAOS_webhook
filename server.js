@@ -6,6 +6,7 @@ app.use(bodyParser.json());
 
 // 🔐 HA Webhook 주소는 환경변수에서 읽음
 const HA_WEBHOOK_URL = process.env.HA_WEBHOOK_URL;
+const { HA_WEBHOOK_URL, WEBHOOK_TOKEN } = process.env;
 
 if (!HA_WEBHOOK_URL) {
   console.error("❌ HA_WEBHOOK_URL 환경변수가 설정되어 있지 않습니다.");
@@ -13,6 +14,13 @@ if (!HA_WEBHOOK_URL) {
 }
 
 app.post('/smartthings', async (req, res) => {
+  const incomingToken = req.query.token;
+
+if (incomingToken !== WEBHOOK_TOKEN) {
+  console.warn("잘못된 토큰 요청 거부:", incomingToken);
+  return res.status(403).send("Forbidden");
+}
+  
   const body = req.body;
   console.log("📥 SmartThings Event:", JSON.stringify(body, null, 2));
 
