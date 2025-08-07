@@ -1,80 +1,67 @@
-const express = require("express");
-const axios = require("axios");
+const express = require('express');
+const axios = require('axios');
 const app = express();
-
-require("dotenv").config();
-
-const PORT = process.env.PORT || 10000;
-const HA_WEBHOOK_URL = process.env.HA_WEBHOOK_URL;
-const WEBHOOK_TOKEN = process.env.WEBHOOK_TOKEN;
-
-if (!HA_WEBHOOK_URL || !WEBHOOK_TOKEN) {
-  console.error("환경변수 HA_WEBHOOK_URL 또는 WEBHOOK_TOKEN 누락");
-  process.exit(1);
-}
+const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
-app.post("/smartthings", async (req, res) => {
-  const incomingToken = req.query.token;
-  const body = req.body;
-  const lifecycle = body.lifecycle;
-
-  // 🔐 Token 인증
-  if (incomingToken !== WEBHOOK_TOKEN) {
-    console.warn("❌ 잘못된 토큰:", incomingToken);
-    return res.status(403).send("Forbidden");
-  }
-
-  // 📡 PING: SmartThings 검증용
-  if (lifecycle === "PING") {
-    console.log("📡 PING 수신됨");
-    return res.json({
-      statusCode: 200,
-      pingData: {
-        challenge: body.pingData.challenge
-      }
-    });
-  }
-
-  // ✅ CONFIRMATION: SmartThings 앱 등록 확인용
-  if (lifecycle === "CONFIRMATION") {
-    const confirmUrl = body.confirmationData.confirmationUrl;
-    console.log("🔗 CONFIRMATION URL 호출 중:", confirmUrl);
-    try {
-      await axios.get(confirmUrl); // SmartThings로 직접 GET 호출
-      console.log("✅ CONFIRMATION GET 성공");
-      return res.status(200).send("CONFIRMATION DONE");
-    } catch (err) {
-      console.error("❌ CONFIRMATION 실패:", err.message);
-      return res.status(500).send("CONFIRMATION FAILED");
-    }
-  }
-
-  // 📦 INSTALL: 앱이 설치될 때
-  if (lifecycle === "INSTALL") {
-    console.log("📦 SmartApp 설치됨");
-    return res.status(200).json({ statusCode: 200 });
-  }
-
-  // 🔔 EVENT: 도어락 이벤트 등
-  if (lifecycle === "EVENT") {
-    console.log("📨 EVENT 수신 → HA로 전달 시도");
+// SmartThings 웹훅을 수신할 엔드포인트
+app.post('/smartthings', async (req, res) => {
+    // 💡 웹훅이 도착했는지 확인하기 위해 전체 요청 본문을 로그에 출력
+    console.log("SmartThings Webhook received.");
+    console.log("Full Payload:", JSON.stringify(req.body, null, 2));
 
     try {
-      await axios.post(HA_WEBHOOK_URL, body); // HA로 전달
-      return res.status(200).send("OK");
-    } catch (err) {
-      console.error("🚨 HA Webhook 전송 실패:", err.message);
-      return res.status(500).send("HA 전송 실패");
-    }
-  }
+        const events = req.body.events;
 
-  // ❓ 알 수 없는 요청
-  console.warn("❓ 알 수 없는 lifecycle:", lifecycle);
-  return res.status(400).send("Unsupported lifecycle");
+        if (!events || events.length === 0) {
+            console.log("No events in payload.");
+            return res.status(200).send("No events to process.");
+        }
+
+        // 모든 이벤트를 순회하며 처리
+        for (const event of events) {
+            const deviceId = event.deviceId;
+            const capability = event.capability;
+            const attribute = event.attribute;
+            const value = event.value;
+
+            // 💡 stse.lockCredentialInfo 이벤트만 필터링
+            if (capability === 'stse.lockCredentialInfo' && attribute === 'credential') {
+                console.log(`Lock Credential Event from device ${deviceId} detected.`);
+                console.log(`Credential Info: ${JSON.stringify(value)}`);
+
+                // Home Assistant로 보낼 데이터 구조화
+                const haPayload = {
+                    eventType: 'doorlock_event',
+                    data: {
+                        userId: value.credentialId,
+                        method: value.credentialType,
+                        action: value.method,
+                        message: `${value.credentialType}로 문이 ${value.method}되었습니다. (User ID: ${value.credentialId})`
+                    }
+                };
+
+                // Home Assistant로 POST 요청 보내기
+                const haWebhookUrl = process.env.HA_WEBHOOK_URL;
+                if (haWebhookUrl) {
+                    await axios.post(haWebhookUrl, haPayload);
+                    console.log("Payload sent to Home Assistant.");
+                } else {
+                    console.error("HA_WEBHOOK_URL environment variable is not set.");
+                }
+            } else {
+                console.log(`Ignoring event: capability=${capability}, attribute=${attribute}`);
+            }
+        }
+
+        res.status(200).send('Webhook processed successfully.');
+    } catch (error) {
+        console.error("Error processing webhook:", error.message);
+        res.status(500).send("Internal Server Error.");
+    }
 });
 
 app.listen(PORT, () => {
-  console.log(`✅ SmartThings Webhook listening on port ${PORT}`);
+    console.log(`Server is running on port ${PORT}`);
 });
